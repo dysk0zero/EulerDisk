@@ -1,2 +1,5 @@
 .*
 !.gitignore
+**/*.egg-info/
+**/output/
+**/__pycache__/

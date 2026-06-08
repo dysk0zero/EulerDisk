@@ -7,4 +7,3 @@ src/Euler_Disk.egg-info/requires.txt
 src/Euler_Disk.egg-info/top_level.txt
 src/euler_disk/__init__.py
 src/euler_disk/data_processing.py
-src/euler_disk/utils.py

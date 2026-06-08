@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "Euler_Disk"
-version = "0.1.1"
+version = "0.1.2"
 description = "Data Analyzer for the project 'Euler Disk' for FU Berlin Projekt Praktikum."
 readme = "README.md"
 requires-python = ">=3.11"
