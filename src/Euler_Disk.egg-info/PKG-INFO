@@ -1,0 +1,25 @@
+Metadata-Version: 2.4
+Name: Euler_Disk
+Version: 0.1.1
+Summary: Data Analyzer for the project 'Euler Disk' for FU Berlin Projekt Praktikum.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: scipy>=1.16.0
+Requires-Dist: jupyter>=1.0.0
+Requires-Dist: ipykernel>=6.0.0
+Requires-Dist: matplotlib>=3.7.0
+
+# Euler Disk
+Disclaimer: This README.md file covers only bash terminal (Unix OS) and the CLI commands for the python package manager: uv.
+In case you use a different system or package manage and don't kno w how to run this, just copy paster this README into an AI and ask how to do this in your machine.
+
+## Initialization
+To initialize, run in your terminal:
+```bash
+  uv sync
+```
+
+## Usage
+Simply create an .ipynb file or use a premade file under /notebooks, importing "data_processing".
+Do not edit the files under /src/ unless you know what you are doing.
