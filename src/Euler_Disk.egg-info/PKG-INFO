@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: Euler_Disk
-Version: 0.1.2
+Version: 0.2.1
 Summary: Data Analyzer for the project 'Euler Disk' for FU Berlin Projekt Praktikum.
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown

@@ -6,18 +6,20 @@ from scipy import signal
 from scipy.io import wavfile
 
 
-def short_time_ft(input_path: str, output_dir: str) -> None:
+def short_time_ft(
+    input_path: str, output_dir: str, window_size: int, hop_size: int
+) -> None:
     rate, data = wavfile.read(input_path)
 
     # Large window -> Bigger time uncertainty, smaller frequency uncertainty. dt*df>=C
-    window_length = 1024
-    hop_size = 128
+    # window_length = 32768
+    # hop_size = 1024
 
     # overlap is the shared sample points between windows, artificially raising our data resolution
-    overlap = window_length - hop_size
+    overlap = window_size - hop_size
 
     frequency, time, z = signal.stft(
-        data, fs=rate, nperseg=window_length, noverlap=overlap
+        data, fs=rate, nperseg=window_size, noverlap=overlap
     )
 
     # Discard complex numbers, keep only the magnitude
@@ -25,7 +27,7 @@ def short_time_ft(input_path: str, output_dir: str) -> None:
 
     settings = {
         "data_rate_hz": rate,
-        "window_length": window_length,
+        "window_length": window_size,
         "hop_size": hop_size,
         "overlap": overlap,
         "window_type": "SciPy's default STFT window",
