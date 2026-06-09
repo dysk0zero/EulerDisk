@@ -8,8 +8,8 @@ data_files = sorted([file for file in os.listdir(input_dir) if file.endswith(".w
 
 # Calculates the max vale of 2^n for the window size in the STFT
 # A good range for the STFT would be between n=10 and n=16
-max_power_window = 15
-min_power_window = 11
+max_power_window = 17
+min_power_window = 15
 
 for i in range(min_power_window, max_power_window + 1):
     window_size = 2**i

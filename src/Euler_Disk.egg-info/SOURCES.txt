@@ -1,9 +1,0 @@
-README.md
-pyproject.toml
-src/Euler_Disk.egg-info/PKG-INFO
-src/Euler_Disk.egg-info/SOURCES.txt
-src/Euler_Disk.egg-info/dependency_links.txt
-src/Euler_Disk.egg-info/requires.txt
-src/Euler_Disk.egg-info/top_level.txt
-src/euler_disk/__init__.py
-src/euler_disk/data_processing.py
