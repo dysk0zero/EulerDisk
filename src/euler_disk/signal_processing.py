@@ -243,3 +243,120 @@ def peaks(
     )
 
     return results
+
+def bandpass(
+    input_path: str,
+    output_dir: str,
+    center_freq_hz: float,
+    bandwidth_hz: float = 50.0,
+    filter_order: int = 4,
+) -> dict:
+    """
+    Isolate a selected frequency band via zero-phase Butterworth bandpass.
+
+    Inputs:
+        input_path: path to the .wav file (raw audio)
+        output_dir: directory to save the output files
+        center_freq_hz: center frequency of the selected bandpass
+        bandwidth_hz: total bandpass width in Hz
+        filter_order: Butterworth filter order (per stage; filtfilt doubles
+            the effective rolloff)
+    Outputs:
+        Saves filtered signal to filtered_signal.npz in output_dir.
+        Saves settings to settings_bandpass.txt in output_dir.
+    Returns:
+        dict with the filtered signal, sample rate, and center frequency
+    """
+    rate, raw = load_audio(input_path)
+
+    f_center = float(center_freq_hz)
+    if f_center <= 0:
+        raise ValueError("center_freq_hz must be positive.")
+    if f_center >= rate / 2:
+        raise ValueError("center_freq_hz must be below the Nyquist frequency.")
+
+    low = max(f_center - bandwidth_hz / 2, 0.1)   # keep strictly > 0
+    high = min(f_center + bandwidth_hz / 2, rate / 2 * 0.999)  # stay under Nyquist
+
+    sos = signal.butter(
+        filter_order, [low, high], btype="bandpass", fs=rate, output="sos"
+    )
+    filtered = signal.sosfiltfilt(sos, raw)
+
+    settings = {
+        "center_freq_hz": f_center,
+        "bandwidth_hz": bandwidth_hz,
+        "low_cutoff_hz": low,
+        "high_cutoff_hz": high,
+        "filter_order": filter_order,
+        "filter_type": "butterworth_bandpass_zero_phase",
+        "sample_rate_hz": rate,
+    }
+    with open(f"{output_dir}/settings_bandpass.txt", "w") as f:
+        json.dump(settings, f, indent=4)
+
+    np.savez_compressed(
+        f"{output_dir}/filtered_signal.npz",
+        signal=filtered,
+        rate=rate,
+        center_freq_hz=f_center,
+    )
+
+    return {
+        "signal": filtered,
+        "rate": rate,
+        "center_freq_hz": f_center,
+    }
+
+def envelope(
+    filtered_signal_path: str,
+    output_dir: str,
+    smooth_window: int | None = None,
+) -> dict:
+    """
+    Extract the amplitude envelope of a filtered signal via the Hilbert transform.
+
+    Inputs:
+        filtered_signal_path: path to filtered_signal.npz from bandpass_isolate
+        output_dir: directory to save the output files
+        smooth_window: optional moving-average window (in samples) to
+            smooth the envelope; None skips smoothing
+    Outputs:
+        Saves envelope, time axis, and analytic signal to envelope.npz.
+        Saves settings to settings_envelope.txt.
+    Returns:
+        dict with time, envelope, and center frequency
+    """
+    data = np.load(filtered_signal_path)
+    filtered = data["signal"]
+    rate = float(data["rate"])
+    f_peak = float(data["center_freq_hz"])
+
+    analytic = signal.hilbert(filtered)
+    envelope = np.abs(analytic)
+
+    if smooth_window is not None and smooth_window > 1:
+        kernel = np.ones(smooth_window) / smooth_window
+        envelope = np.convolve(envelope, kernel, mode="same")
+
+    time = np.arange(len(filtered)) / rate
+
+    settings = {
+        "sample_rate_hz": rate,
+        "center_freq_hz": f_peak,
+        "smooth_window": smooth_window,
+        "n_samples": len(filtered),
+        "duration_s": time[-1] if len(time) else 0.0,
+    }
+    with open(f"{output_dir}/settings_envelope.txt", "w") as f:
+        json.dump(settings, f, indent=4)
+
+    np.savez_compressed(
+        f"{output_dir}/envelope.npz",
+        time=time,
+        envelope=envelope,
+        rate=rate,
+        center_freq_hz=f_peak,
+    )
+
+    return {"time": time, "envelope": envelope, "center_freq_hz": f_peak}
