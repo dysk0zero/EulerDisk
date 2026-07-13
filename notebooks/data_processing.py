@@ -4,12 +4,10 @@
 # Quick start: pip install runcell
 
 import os
-from time import time
 
 import numpy as np
 import euler_disk as ed
 import matplotlib.pyplot as plt
-from scipy import signal
 
 # # Notebook Data Analysis of Euler Disk
 # Note: This is the single file version of the data analysis notebook, intended to perform analysis of all of the experimental data in every run.
@@ -36,20 +34,7 @@ ed.welch(input_path=input_dir, output_dir=output_dir, window_size=window_size, h
 data_welch = np.load(f"{output_dir}/data_welch.npz")
 freq, power = data_welch["frequencies"], data_welch["power"]
 
-f_min, f_max = 20, 24000
-
-fig, ax = plt.subplots(figsize=(10, 5))
-ax.semilogy(freq, power)
-ax.set_xlabel("Frequency (Hz)")
-ax.set_ylabel("Power Spectral Density (V²/Hz)")
-ax.set_title("Welch's Method - Power Spectrum")
-ax.set_xlim(f_min, f_max)
-ax.grid(True, which="both", alpha=0.3)
-
-fig.tight_layout()
-plt.show()
-
-# ## Step 2: Identify Carrier Peaks
+# ## Step 2: Identify Resonant Peaks
 # We use our own function that uses scipy.find_peaks to find strong acoustic carriers and then choose our bandpass for AM processing.
 
 
@@ -84,20 +69,20 @@ carrier_high_hz = 5400
 
 fig, ax = plt.subplots(figsize=(10, 5))
 ax.set_yscale("linear")
-ax.plot(data_welch["frequencies"], welch_db, label="Power Spectral Density", color="tab:blue")
+ax.plot(data_welch["frequencies"], welch_db, label="Power Spectral Density", linewidth=1.5, color="tab:blue")
 ax.scatter(peak_data["frequencies"], peak_db, color="tab:red", s=50, marker="v", label=f"Peaks (n={len(peak_data['frequencies'])})", zorder=5)
 ax.axvspan(
     carrier_low_hz,
     carrier_high_hz,
-    alpha=0.2,
+    alpha=0.15,
     color="tab:green",
     label="Selected carrier band",
 )
 ax.set_xlabel("Frequency (Hz)")
 ax.set_ylabel("Power Spectral Density (dB)")
-ax.set_title("Power Spectrum with Detected Peaks - Welch's Method")
+ax.set_title("Power Spectrum and Resonant Peaks - Welch's Method")
 ax.grid(True, which="both", alpha=0.3)
-ax.set_xlim(f_min, 20000)
+ax.set_xlim(20, 20000)
 ax.set_ylim(-100)
 ax.legend()
 
@@ -126,131 +111,235 @@ ed.carrier_envelope(
     save_carrier_outputs=False,
 )
 
-# ## Step 4: Envelope
-# The envelope is the magnitude of the in-phase and quadrature carrier-band outputs.
+# ## Step 4: Processed Envelope
+# Downsample the carrier envelope and remove its DC component prior to
+# spectrogram analysis, following the MATLAB reference pipeline.
 
-envelope_data = np.load(f"{output_dir}/envelope.npz")
+downsample_factor = 100
+hp_cutoff_hz = 3.0
+hp_order = 2
 
-envelope_time = envelope_data["time"]
-envelope = envelope_data["envelope"]
+ed.preprocess_envelope(
+    envelope_path=f"{output_dir}/envelope.npz",
+    output_dir=output_dir,
+    downsample_factor=downsample_factor,
+    hp_cutoff_hz=hp_cutoff_hz,
+    hp_order=hp_order,
+)
 
-fig, envelope_axes = plt.subplots(1, 2, figsize=(20, 4), squeeze=False)
-envelope_ax = envelope_axes[0, 0]
-envelope_zoom_ax = envelope_axes[0, 1]
+preprocessed_data = np.load(f"{output_dir}/envelope_preprocessed.npz")
 
-envelope_ax.plot(envelope_time, envelope, color="g")
-envelope_ax.set_xlabel("Time (s)")
-envelope_ax.set_ylabel("Envelope Amplitude")
-envelope_ax.set_title("Envelope of the Filtered Signal")
-envelope_ax.grid(True, which="both", alpha=0.3)
-envelope_ax.set_xlim(envelope_time[0], envelope_time[-1])
+preprocessed_time = preprocessed_data["time"]
+preprocessed_envelope = preprocessed_data["envelope"]
+preprocessed_rate = float(preprocessed_data["rate"])
 
-envelope_zoom_ax.plot(envelope_time, envelope, color="g")
-envelope_zoom_ax.set_xlabel("Time (s)")
-envelope_zoom_ax.set_ylabel("Envelope Amplitude")
-envelope_zoom_ax.set_title("Zoomed Envelope of the Filtered Signal - Last 4 seconds")
-envelope_zoom_ax.grid(True, which="both", alpha=0.3)
-envelope_zoom_ax.set_xlim(24.0, 26.1)
-for ax in (envelope_ax, envelope_zoom_ax):
-    ax.axvline(
-        26.05,
-        color="tab:red",
-        linestyle="--",
-        alpha=0.5,
-        label="Approx. end of motion",
-    )
+fig, axes = plt.subplots(1, 2, figsize=(20, 4), squeeze=False)
+
+ax_full = axes[0, 0]
+ax_zoom = axes[0, 1]
+
+ax_full.plot(preprocessed_time, preprocessed_envelope, color="tab:blue")
+ax_full.set_xlabel("Time (s)")
+ax_full.set_ylabel("Envelope Amplitude")
+ax_full.set_title("Processed Envelope at the Beginning")
+ax_full.grid(True, which="both", alpha=0.3)
+ax_full.set_xlim(4.0, 7.1)
+
+ax_zoom.plot(preprocessed_time, preprocessed_envelope, color="tab:blue")
+ax_zoom.set_xlabel("Time (s)")
+ax_zoom.set_ylabel("Envelope Amplitude")
+ax_zoom.set_title("Processed Envelope at the Singularity")
+ax_zoom.grid(True, which="both", alpha=0.3)
+ax_zoom.set_xlim(23.0, 26.1)
 
 fig.tight_layout()
 plt.show()
 
-# ## Step 5: Envelope Processing
+# ## Step 5: Spectrogram
+# Compute the spectrogram of the downsampled, high-pass filtered envelope
+# using the same parameters as the MATLAB reference.
 
+window_length = 512
+overlap = 500
+nfft = 4096
 
-
-# The physical precession fundamental is expected in the low-frequency amplitude modulation, not in the acoustic carrier band itself.
-
-rate = float(envelope_data["rate"])
-carrier_center_hz = float(envelope_data["center_freq_hz"])
-
-spectrogram_start = 23.0
-spectrogram_end = min(26.1, envelope_time[-1])
-start_sample = int(spectrogram_start * rate)
-end_sample = int(spectrogram_end * rate)
-
-envelope_segment = envelope[start_sample:end_sample]
-envelope_segment = signal.detrend(envelope_segment, type="constant")
-
-envelope_spectrogram_nperseg = min(32768, len(envelope_segment))
-envelope_spectrogram_noverlap = min(28672, envelope_spectrogram_nperseg - 1)
-
-(
-    envelope_frequencies,
-    envelope_spectrogram_times,
-    envelope_spectrogram_power,
-) = signal.spectrogram(
-    envelope_segment,
-    fs=rate,
-    window="hann",
-    nperseg=envelope_spectrogram_nperseg,
-    noverlap=envelope_spectrogram_noverlap,
-    detrend="constant",
-    scaling="density",
-    mode="psd",
-)
-envelope_spectrogram_times = envelope_spectrogram_times + spectrogram_start
-envelope_spectrogram_db = 10 * np.log10(envelope_spectrogram_power + 1e-20)
-
-fundamental_min_hz = 20
-fundamental_max_hz = 80
-fundamental_mask = (
-    (envelope_frequencies >= fundamental_min_hz)
-    & (envelope_frequencies <= fundamental_max_hz)
+ed.envelope_spectrogram(
+    envelope_path=f"{output_dir}/envelope_preprocessed.npz",
+    output_dir=output_dir,
+    window_length=window_length,
+    overlap=overlap,
+    nfft=nfft,
 )
 
-fundamental_frequencies = envelope_frequencies[fundamental_mask]
-fundamental_spectrogram_db = envelope_spectrogram_db[fundamental_mask, :]
-if len(fundamental_frequencies) == 0:
-    raise ValueError("No envelope spectrogram bins found in the fundamental band.")
-fundamental_ridge = fundamental_frequencies[
-    np.argmax(fundamental_spectrogram_db, axis=0)
-]
+spectrogram_data = np.load(
+    f"{output_dir}/envelope_spectrogram.npz"
+)
 
-np.savez_compressed(
-    f"{output_dir}/precession_ridge.npz",
-    time=envelope_spectrogram_times,
-    frequency=fundamental_ridge,
-    carrier_center_hz=carrier_center_hz,
-    frequency_min_hz=fundamental_min_hz,
-    frequency_max_hz=fundamental_max_hz,
-    time_start_s=spectrogram_start,
-    time_end_s=spectrogram_end,
+spectrogram_frequency = spectrogram_data["frequency"]
+spectrogram_time = spectrogram_data["time"]
+spectrogram = spectrogram_data["spectrum"]
+
+#
+# MATLAB:
+# imagesc(10*log10(abs(A0)+0.01))
+#
+spectrogram_db = 10 * np.log10(np.abs(spectrogram) + 0.01)
+
+frequency_min_hz = 15
+frequency_max_hz = 45
+
+frequency_mask = (
+    (spectrogram_frequency >= frequency_min_hz)
+    & (spectrogram_frequency <= frequency_max_hz)
 )
 
 fig, ax = plt.subplots(figsize=(10, 5))
+
 mesh = ax.pcolormesh(
-    envelope_spectrogram_times,
-    fundamental_frequencies,
-    fundamental_spectrogram_db,
+    spectrogram_time,
+    spectrogram_frequency[frequency_mask],
+    spectrogram_db[frequency_mask],
     shading="auto",
-    cmap="viridis",
+    cmap="plasma",
 )
-ax.plot(
-    envelope_spectrogram_times,
-    fundamental_ridge,
-    color="white",
-    linewidth=1.2,
-    label="Dominant envelope ridge",
-)
+
+ax.set_xlim(24.0, 26.1)
+ax.set_ylim(frequency_min_hz, frequency_max_hz)
+
 ax.set_xlabel("Time (s)")
 ax.set_ylabel("Frequency (Hz)")
-ax.set_title("Demodulated Envelope Spectrogram - Fundamental Band")
-ax.set_xlim(spectrogram_start, spectrogram_end)
-ax.set_ylim(fundamental_min_hz, fundamental_max_hz)
+ax.set_title("Spectrogram at Singularity")
+
+ax.grid(True, which="both", alpha=0.2)
+
+cbar = fig.colorbar(mesh, ax=ax)
+cbar.set_label("Magnitude (dB)")
+
+
+fig.tight_layout()
+plt.show()
+
+# ## Step 6: Extract Precession Ridge
+# We extract the dominant precession ridge from the spectrogram using the same parameters as the MATLAB reference.
+ridge = ed.extract_precession_ridge(
+    spectrogram_path=f"{output_dir}/envelope_spectrogram.npz",
+    output_dir=output_dir,
+    frequency_min_hz=frequency_min_hz,
+    frequency_max_hz=frequency_max_hz,
+)
+
+fig, ax = plt.subplots(figsize=(10, 5))
+
+mesh = ax.pcolormesh(
+    spectrogram_time,
+    spectrogram_frequency[frequency_mask],
+    spectrogram_db[frequency_mask],
+    shading="auto",
+    cmap="plasma",
+)
+
+plt.plot(
+    ridge["time"],
+    ridge["frequency"],
+    color="white",
+    linewidth=2,
+    label="Dominant ridge",
+    alpha=0.6,
+)
+
+ax.set_xlim(24.0, 26.1)
+ax.set_ylim(frequency_min_hz, frequency_max_hz)
+
+ax.set_xlabel("Time (s)")
+ax.set_ylabel("Frequency (Hz)")
+ax.set_title("Dominant Precession Ridge")
+
 ax.grid(True, which="both", alpha=0.2)
 ax.legend(loc="upper left")
 
 cbar = fig.colorbar(mesh, ax=ax)
-cbar.set_label("Envelope Power Spectral Density (dB/Hz)")
+cbar.set_label("Magnitude (dB)")
+
+fig.tight_layout()
+plt.show()
+
+# ## Step 7: Power-Law Fit
+# Fit the extracted precession ridge to the power-law model
+#
+#     f(t) = k * (1 / (t0 - t)) ** alpha
+#
+# by optimizing the singularity time t0.
+
+t0_min = 25.0
+t0_max = 27.0
+t0_step = 0.01
+
+fit = ed.fit_precession_power_law(
+    ridge_path=f"{output_dir}/precession_ridge.npz",
+    output_dir=output_dir,
+    t0_min=t0_min,
+    t0_max=t0_max,
+    t0_step=t0_step,
+)
+
+print("Power-law fit")
+print("-" * 40)
+print(f"t0    = {fit['t0']:.4f} s")
+print(f"alpha = {fit['alpha']:.4f}")
+print(f"k     = {fit['k']:.4f}")
+print(f"RMSE  = {fit['rmse']:.4e}")
+print(f"R²    = {fit['r2']:.5f}")
+
+fig, ax = plt.subplots(figsize=(10, 5))
+
+mesh = ax.pcolormesh(
+    spectrogram_time,
+    spectrogram_frequency[frequency_mask],
+    spectrogram_db[frequency_mask],
+    shading="auto",
+    cmap="plasma",
+)
+
+ax.fill_between(
+    ridge["time"],
+    ridge["frequency"] - ridge["frequency_uncertainty"],
+    ridge["frequency"] + ridge["frequency_uncertainty"],
+    color="white",
+    alpha=0.25,
+    linewidth=0,
+    label="Uncertainty",
+)
+
+ax.plot(
+    ridge["time"],
+    ridge["frequency"],
+    color="white",
+    linewidth=2,
+    label="Dominant ridge",
+)
+
+ax.plot(
+    fit["time"],
+    fit["frequency_fit"],
+    color="tab:red",
+    linewidth=2,
+    label=(
+        rf"Power-law fit ($\alpha={fit['alpha']:.3f}$)"
+    ),
+)
+
+ax.set_xlim(24.0, 26.1)
+ax.set_ylim(frequency_min_hz, frequency_max_hz)
+
+ax.set_xlabel("Time (s)")
+ax.set_ylabel("Frequency (Hz)")
+ax.set_title("Precession Ridge and Power-Law Fit")
+
+ax.grid(True, which="both", alpha=0.2)
+ax.legend(loc="upper left")
+
+cbar = fig.colorbar(mesh, ax=ax)
+cbar.set_label("Magnitude (dB)")
 
 fig.tight_layout()
 plt.show()

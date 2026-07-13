@@ -29,9 +29,6 @@ class PeakResults(TypedDict):
     left_ips: NotRequired[NDArray[np.float64]]
     right_ips: NotRequired[NDArray[np.float64]]
 
-fmin = 20
-fmax = 24000
-
 def welch(
     input_path: str, output_dir: str, window_size: int, hop_size: int
     ) -> None:
@@ -47,6 +44,9 @@ def welch(
         Saves the PSD frequencies and power values to a .npz file in the output_dir.
         Saves the settings used for the PSD to a settings.txt file in the output_dir.
     '''
+    fmin = 20
+    fmax = 24000
+    
     rate, data = load_audio(input_path)
 
     noverlap=(window_size - hop_size)
@@ -134,18 +134,20 @@ def short_time_ft(
         f"{output_dir}/data.npz", frequencies=frequency, times=time, magnitude=magnitude
     )
 
-def load_audio(input_path: str) -> tuple[int, np.ndarray]:
+def load_audio(input_path: str, normalize: bool = False) -> tuple[int, np.ndarray]:
     '''
     Load a .wav file and preprocess it for spectral analysis.
     
     Inputs:
         input_path: path to the .wav file
+        normalize: whether to normalize integer PCM audio to roughly [-1, 1]
         
     Returns:
         rate: sampling frequency in Hz
         data: audio data as float64 numpy array (mono)
     '''
     rate, data = wavfile.read(input_path)
+    original_dtype = data.dtype
 
     # Handle stereo audio by converting to mono
     if len(data.shape) > 1:
@@ -153,8 +155,495 @@ def load_audio(input_path: str) -> tuple[int, np.ndarray]:
 
     # Ensure data is float for processing
     data = data.astype(np.float64)
+    if normalize and np.issubdtype(original_dtype, np.integer):
+        data = data / np.iinfo(original_dtype).max
 
     return rate, data
+
+def _extend_signal(
+    data: NDArray[np.float64],
+    rate: int,
+    extend_to_s: float | None,
+    noise_std: float,
+    random_seed: int | None,
+) -> NDArray[np.float64]:
+    if extend_to_s is None:
+        extended = data.copy()
+    else:
+        target_samples = int(np.ceil(extend_to_s * rate))
+        if target_samples <= len(data):
+            extended = data.copy()
+        else:
+            extended = np.zeros(target_samples, dtype=np.float64)
+            extended[: len(data)] = data
+
+    if noise_std > 0:
+        rng = np.random.default_rng(random_seed)
+        extended = extended + rng.normal(0.0, noise_std, size=len(extended))
+
+    return extended
+
+def carrier_envelope(
+    input_path: str,
+    output_dir: str,
+    low_cutoff_hz: float,
+    high_cutoff_hz: float,
+    fir_order: int = 400,
+    extend_to_s: float | None = None,
+    extension_noise_std: float = 0.0,
+    random_seed: int | None = None,
+    normalize_audio: bool = True,
+    save_carrier_outputs: bool = False,
+) -> dict:
+    """
+    Demodulate an acoustic carrier band with an FIR quadrature filter bank.
+
+    This follows the MATLAB analysis structure:
+        B = fir1(order, [low high] / Nyquist)
+        Bo = imag(hilbert(B))
+        envelope = abs(filter(B, x) + 1j * filter(Bo, x))
+
+    Inputs:
+        input_path: path to the .wav file
+        output_dir: directory to save output files
+        low_cutoff_hz: low edge of the acoustic carrier band
+        high_cutoff_hz: high edge of the acoustic carrier band
+        fir_order: FIR order; the number of taps is fir_order + 1
+        extend_to_s: optional duration to zero-pad the signal to before
+            filtering, used to reduce end artifacts near the singularity
+        extension_noise_std: optional additive white Gaussian noise standard
+            deviation, in the same units as the loaded audio
+        random_seed: optional seed for the added noise
+        normalize_audio: whether to normalize integer PCM audio to roughly
+            [-1, 1], matching MATLAB audioread behavior
+        save_carrier_outputs: whether to save the in-phase and quadrature
+            carrier outputs in envelope.npz
+
+    Outputs:
+        Saves envelope.npz and settings_envelope.txt in output_dir.
+
+    Returns:
+        dict with time, envelope, carrier outputs, and sample rate.
+    """
+    rate, raw = load_audio(input_path, normalize=normalize_audio)
+    nyquist = rate / 2
+    low = float(low_cutoff_hz)
+    high = float(high_cutoff_hz)
+
+    if low <= 0:
+        raise ValueError("low_cutoff_hz must be positive.")
+    if high <= low:
+        raise ValueError("high_cutoff_hz must be greater than low_cutoff_hz.")
+    if high >= nyquist:
+        raise ValueError("high_cutoff_hz must be below the Nyquist frequency.")
+    if fir_order < 2:
+        raise ValueError("fir_order must be at least 2.")
+
+    raw_extended = _extend_signal(
+        raw,
+        rate,
+        extend_to_s=extend_to_s,
+        noise_std=extension_noise_std,
+        random_seed=random_seed,
+    )
+
+    bandpass_kernel = signal.firwin(
+        numtaps=fir_order + 1,
+        cutoff=[low, high],
+        pass_zero=False,
+        fs=rate,
+        window="hamming",
+    )
+    quadrature_kernel = np.imag(signal.hilbert(bandpass_kernel))
+
+    carrier_in_phase = signal.lfilter(bandpass_kernel, [1.0], raw_extended)
+    carrier_quadrature = signal.lfilter(quadrature_kernel, [1.0], raw_extended)
+    envelope = np.abs(carrier_in_phase + 1j * carrier_quadrature)
+    time = np.arange(len(envelope)) / rate
+    center_freq_hz = (low + high) / 2
+
+    settings = {
+        "sample_rate_hz": rate,
+        "low_cutoff_hz": low,
+        "high_cutoff_hz": high,
+        "center_freq_hz": center_freq_hz,
+        "fir_order": fir_order,
+        "num_taps": fir_order + 1,
+        "filter_type": "fir_hamming_bandpass_quadrature",
+        "input_samples": len(raw),
+        "output_samples": len(raw_extended),
+        "input_duration_s": len(raw) / rate,
+        "output_duration_s": time[-1] if len(time) else 0.0,
+        "extend_to_s": extend_to_s,
+        "extension_noise_std": extension_noise_std,
+        "random_seed": random_seed,
+        "normalize_audio": normalize_audio,
+        "save_carrier_outputs": save_carrier_outputs,
+    }
+    with open(f"{output_dir}/settings_envelope.txt", "w") as f:
+        json.dump(settings, f, indent=4)
+
+    save_data: dict[str, Any] = {
+        "time": time,
+        "envelope": envelope,
+        "rate": rate,
+        "center_freq_hz": center_freq_hz,
+        "low_cutoff_hz": low,
+        "high_cutoff_hz": high,
+    }
+    if save_carrier_outputs:
+        save_data["carrier_in_phase"] = carrier_in_phase
+        save_data["carrier_quadrature"] = carrier_quadrature
+
+    np.savez_compressed(
+        f"{output_dir}/envelope.npz",
+        **save_data,
+    )
+
+    return {
+        "time": time,
+        "envelope": envelope,
+        "rate": rate,
+        "center_freq_hz": center_freq_hz,
+        "low_cutoff_hz": low,
+        "high_cutoff_hz": high,
+        "carrier_in_phase": carrier_in_phase,
+        "carrier_quadrature": carrier_quadrature,
+    }
+
+def preprocess_envelope(
+    envelope_path: str,
+    output_dir: str,
+    downsample_factor: int = 100,
+    hp_cutoff_hz: float = 3.0,
+    hp_order: int = 2,
+) -> dict:
+    """
+    MATLAB equivalent:
+
+        a1 = resample(a0,1,100)
+        [Bhp,Ahp] = butter(2,3/(fs/100/2),'high');
+        a2 = filter(Bhp,Ahp,a1);
+
+    Parameters
+    ----------
+    envelope_path
+        Path to envelope.npz produced by carrier_envelope().
+    output_dir
+        Directory where processed envelope is saved.
+    """
+
+    data = np.load(envelope_path)
+
+    envelope = data["envelope"]
+    fs = float(data["rate"])
+
+    envelope_ds = signal.resample_poly(
+        envelope,
+        up=1,
+        down=downsample_factor,
+    )
+
+    fs_ds = fs / downsample_factor
+
+    sos = signal.butter(
+        hp_order,
+        hp_cutoff_hz,
+        btype="highpass",
+        fs=fs_ds,
+        output="sos",
+    )
+
+    envelope_hp = signal.sosfilt(sos, envelope_ds)
+
+    time = np.arange(len(envelope_hp)) / fs_ds
+
+    settings = {
+        "original_rate_hz": fs,
+        "downsample_factor": downsample_factor,
+        "processed_rate_hz": fs_ds,
+        "highpass_order": hp_order,
+        "highpass_cutoff_hz": hp_cutoff_hz,
+    }
+
+    with open(f"{output_dir}/settings_envelope_preprocessed.txt", "w") as f:
+        json.dump(settings, f, indent=4)
+
+    np.savez_compressed(
+        f"{output_dir}/envelope_preprocessed.npz",
+        time=time,
+        envelope=envelope_hp,
+        rate=fs_ds,
+    )
+
+    return {
+        "time": time,
+        "envelope": envelope_hp,
+        "rate": fs_ds,
+    }
+
+def envelope_spectrogram(
+    envelope_path: str,
+    output_dir: str,
+    window_length: int = 512,
+    overlap: int = 500,
+    nfft: int = 4096,
+) -> dict:
+    """
+    MATLAB equivalent:
+
+        [A0,f,ts] =
+            spectrogram(a2,hamming(512),500,4096,fs)
+
+    Returns the COMPLEX STFT.
+    """
+
+    data = np.load(envelope_path)
+
+    envelope = data["envelope"]
+    fs = float(data["rate"])
+
+    frequency, time, spectrum = signal.spectrogram(
+        envelope,
+        fs=fs,
+        window="hamming",
+        nperseg=window_length,
+        noverlap=overlap,
+        nfft=nfft,
+        detrend=False,
+        scaling="spectrum",
+        mode="complex",
+    )
+
+    np.savez_compressed(
+        f"{output_dir}/envelope_spectrogram.npz",
+        frequency=frequency,
+        time=time,
+        spectrum=spectrum,
+    )
+
+    settings = {
+        "window": "Hamming",
+        "window_length": window_length,
+        "overlap": overlap,
+        "nfft": nfft,
+        "sample_rate_hz": fs,
+    }
+
+    with open(f"{output_dir}/settings_spectrogram.txt", "w") as f:
+        json.dump(settings, f, indent=4)
+
+    return {
+        "frequency": frequency,
+        "time": time,
+        "spectrum": spectrum,
+    }
+
+def peak_interpolation(
+    psd: np.ndarray,
+    frequency: np.ndarray,
+    indices: np.ndarray,
+) -> np.ndarray:
+    """
+    Reproduce MATLAB's three-bin interpolation exactly.
+    """
+
+    refined = frequency[indices].copy()
+
+    df = frequency[1] - frequency[0]
+
+    for k in range(len(indices)):
+
+        i = indices[k]
+
+        if i == 0:
+            continue
+
+        if i == len(frequency) - 1:
+            continue
+
+        peak = psd[i, k]
+
+        ya = psd[i - 1, k] - peak
+        yb = psd[i + 1, k] - peak
+
+        denom = ya + yb
+
+        if denom == 0:
+            continue
+
+        dx = 0.5 * (ya - yb) / denom
+
+        refined[k] += dx * df
+
+    return refined
+
+def extract_precession_ridge(
+    spectrogram_path: str,
+    output_dir: str,
+    frequency_min_hz: float = 20,
+    frequency_max_hz: float = 60,
+) -> dict:
+    """
+    Extract dominant ridge exactly like MATLAB.
+    """
+
+    data = np.load(spectrogram_path)
+
+    frequency = data["frequency"]
+    time = data["time"]
+    spectrum = data["spectrum"]
+
+    psd = np.abs(spectrum) ** 2
+
+    mask = (
+        (frequency >= frequency_min_hz)
+        & (frequency <= frequency_max_hz)
+    )
+
+    f = frequency[mask]
+
+    psd = psd[mask]
+
+    peak_indices = np.argmax(psd, axis=0)
+
+    ridge_raw = f[peak_indices]
+
+    ridge_interp = peak_interpolation(
+        psd,
+        f,
+        peak_indices,
+    )
+
+    np.savez_compressed(
+        f"{output_dir}/precession_ridge.npz",
+        time=time,
+        frequency=ridge_interp,
+        frequency_raw=ridge_raw,
+        envelope_frequency_min_hz=frequency_min_hz,
+        envelope_frequency_max_hz=frequency_max_hz,
+    )
+
+    return {
+        "time": time,
+        "frequency": ridge_interp,
+        "frequency_raw": ridge_raw,
+        "spectrogram": psd,
+        "frequency_axis": f,
+    }
+
+def fit_precession_power_law(
+    ridge_path: str,
+    output_dir: str,
+    t0_min: float = 25.0,
+    t0_max: float = 27.0,
+    t0_step: float = 0.01,
+) -> dict:
+    """
+    Fit the dominant precession ridge to
+
+        f(t) = k * (1 / (t0 - t)) ** alpha
+
+    by scanning candidate values of t0 and selecting the one that minimizes
+    the least-squares error in log-log space.
+
+    This follows the final optimization stage of the MATLAB reference.
+    """
+
+    data = np.load(ridge_path)
+
+    time = data["time"]
+    frequency = data["frequency"]
+
+    valid = frequency > 0
+    time = time[valid]
+    frequency = frequency[valid]
+
+    t0_values = np.arange(t0_min, t0_max + t0_step / 2, t0_step)
+
+    errors = []
+    alphas = []
+    ks = []
+
+    best_error = np.inf
+    best_fit = {}
+
+    for t0 in t0_values:
+
+        mask = time < t0
+
+        # Need enough samples to perform a regression
+        if np.count_nonzero(mask) < 5:
+            continue
+
+        x = np.log10(t0 - time[mask])
+        y = np.log10(frequency[mask])
+
+        slope, intercept = np.polyfit(x, y, deg=1)
+
+        alpha = -slope
+        k = 10.0 ** intercept
+
+        y_model = intercept + slope * x
+        error = np.sum((y - y_model) ** 2)
+
+        errors.append(error)
+        alphas.append(alpha)
+        ks.append(k)
+
+        if error < best_error:
+
+            best_error = error
+
+            frequency_fit = k * (1.0 / (t0 - time[mask])) ** alpha
+
+            ss_res = np.sum((y - y_model) ** 2)
+            ss_tot = np.sum((y - np.mean(y)) ** 2)
+
+            r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
+            rmse = np.sqrt(np.mean((y - y_model) ** 2))
+
+            best_fit = {
+                "time": time[mask],
+                "frequency_fit": frequency_fit,
+                "t0": t0,
+                "alpha": alpha,
+                "k": k,
+                "rmse": rmse,
+                "r2": r2,
+            }
+
+    settings = {
+        "model": "f(t)=k*(1/(t0-t))**alpha",
+        "t0_min": t0_min,
+        "t0_max": t0_max,
+        "t0_step": t0_step,
+        "best_t0": best_fit["t0"],
+        "best_alpha": best_fit["alpha"],
+        "best_k": best_fit["k"],
+        "best_rmse": best_fit["rmse"],
+        "best_r2": best_fit["r2"],
+    }
+
+    with open(f"{output_dir}/settings_precession_fit.txt", "w") as f:
+        json.dump(settings, f, indent=4)
+
+    np.savez_compressed(
+        f"{output_dir}/precession_fit.npz",
+        **best_fit,
+        t0_scan=t0_values[: len(errors)],
+        error_scan=np.asarray(errors),
+        alpha_scan=np.asarray(alphas),
+        k_scan=np.asarray(ks),
+    )
+
+    return {
+        **best_fit,
+        "t0_scan": t0_values[: len(errors)],
+        "error_scan": np.asarray(errors),
+        "alpha_scan": np.asarray(alphas),
+        "k_scan": np.asarray(ks),
+    }
 
 def peaks(
     input_path: str,
@@ -243,6 +732,8 @@ def peaks(
     )
 
     return results
+
+# LEGACY FUNCTIONS
 
 def bandpass(
     input_path: str,
@@ -348,11 +839,11 @@ def envelope(
         "n_samples": len(filtered),
         "duration_s": time[-1] if len(time) else 0.0,
     }
-    with open(f"{output_dir}/settings_envelope.txt", "w") as f:
+    with open(f"{output_dir}/settings_hilbert_envelope.txt", "w") as f:
         json.dump(settings, f, indent=4)
 
     np.savez_compressed(
-        f"{output_dir}/envelope.npz",
+        f"{output_dir}/hilbert_envelope.npz",
         time=time,
         envelope=envelope,
         rate=rate,
