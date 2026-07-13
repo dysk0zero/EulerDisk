@@ -1,8 +1,3 @@
-# Generated from: data_processing.ipynb
-# Converted at: 2026-07-13T13:15:20.071Z
-# Next step (optional): refactor into modules & generate tests with RunCell
-# Quick start: pip install runcell
-
 import os
 
 import numpy as np
@@ -263,83 +258,85 @@ cbar.set_label("Magnitude (dB)")
 fig.tight_layout()
 plt.show()
 
-# ## Step 7: Power-Law Fit
-# Fit the extracted precession ridge to the power-law model
-#
-#     f(t) = k * (1 / (t0 - t)) ** alpha
-#
-# by optimizing the singularity time t0.
+# ## Step 7: Linear fit over log-log of the precession ridge
+from scipy.stats import linregress
 
-t0_min = 25.0
-t0_max = 27.0
-t0_step = 0.01
+ts = ridge["time"]
+fmax_smooth = ridge["frequency"]
 
-fit = ed.fit_precession_power_law(
-    ridge_path=f"{output_dir}/precession_ridge.npz",
-    output_dir=output_dir,
-    t0_min=t0_min,
-    t0_max=t0_max,
-    t0_step=t0_step,
-)
+lf = np.log10(fmax_smooth)
 
-print("Power-law fit")
-print("-" * 40)
-print(f"t0    = {fit['t0']:.4f} s")
-print(f"alpha = {fit['alpha']:.4f}")
-print(f"k     = {fit['k']:.4f}")
-print(f"RMSE  = {fit['rmse']:.4e}")
-print(f"R²    = {fit['r2']:.5f}")
+# Initial guess
+t0 = 26.08
 
-fig, ax = plt.subplots(figsize=(10, 5))
+x = np.log10(t0 - ts)
 
-mesh = ax.pcolormesh(
-    spectrogram_time,
-    spectrogram_frequency[frequency_mask],
-    spectrogram_db[frequency_mask],
-    shading="auto",
-    cmap="plasma",
-)
+cond = ts < t0
 
-ax.fill_between(
-    ridge["time"],
-    ridge["frequency"] - ridge["frequency_uncertainty"],
-    ridge["frequency"] + ridge["frequency_uncertainty"],
-    color="white",
-    alpha=0.25,
-    linewidth=0,
-    label="Uncertainty",
-)
+result = linregress(x[cond], lf[cond])
 
-ax.plot(
-    ridge["time"],
-    ridge["frequency"],
-    color="white",
-    linewidth=2,
-    label="Dominant ridge",
-)
+alpha = -result.slope
+k = 10**result.intercept
 
-ax.plot(
-    fit["time"],
-    fit["frequency_fit"],
-    color="tab:red",
-    linewidth=2,
-    label=(
-        rf"Power-law fit ($\alpha={fit['alpha']:.3f}$)"
-    ),
-)
+print(f"Initial estimate: alpha={alpha:.4f}, k={k:.4f}")
 
-ax.set_xlim(24.0, 26.1)
-ax.set_ylim(frequency_min_hz, frequency_max_hz)
+# Restrict fitting range
+cond = (x > -0.5) & (x < 1) & (ts < t0)
 
-ax.set_xlabel("Time (s)")
-ax.set_ylabel("Frequency (Hz)")
-ax.set_title("Precession Ridge and Power-Law Fit")
+x_fit = x[cond]
+lf_fit = lf[cond]
+ts_fit = ts[cond]
 
-ax.grid(True, which="both", alpha=0.2)
-ax.legend(loc="upper left")
+result = linregress(x_fit, lf_fit)
 
-cbar = fig.colorbar(mesh, ax=ax)
-cbar.set_label("Magnitude (dB)")
+alpha = -result.slope
+k = 10**result.intercept
 
-fig.tight_layout()
+f_model = k * (1/(t0-ts_fit))**alpha
+
+best_error = np.inf
+
+for t0_test in np.arange(25, 27.001, 0.05):
+
+    cond = ts_fit < t0_test
+
+    if np.sum(cond) < 3:
+        continue
+
+    x_test = np.log10(t0_test - ts_fit[cond])
+    lf_test = lf_fit[cond]
+
+    result = linregress(x_test, lf_test)
+
+    lf_pred = result.intercept + result.slope*x_test
+
+    error = np.sum((lf_pred-lf_test)**2)
+
+    if error < best_error:
+
+        best_error = error
+        t0_opt = t0_test
+        alpha_opt = -result.slope
+        k_opt = 10**result.intercept
+
+print(f"Optimal t0 = {t0_opt:.3f}")
+print(f"alpha = {alpha_opt:.4f}")
+print(f"k = {k_opt:.4f}")
+
+cond = ts < t0_opt
+
+ts_model = ts[cond]
+
+f_model = k_opt*(1/(t0_opt-ts_model))**alpha_opt
+
+f_model_full = np.full_like(ts, f_model[-1])
+f_model_full[:len(f_model)] = f_model
+
+plt.figure(figsize=(8,4))
+plt.plot(ts, fmax_smooth, label="Measured")
+plt.plot(ts, f_model_full, linewidth=2, label="Power-law fit")
+plt.xlabel("Time (s)")
+plt.ylabel("Frequency (Hz)")
+plt.grid(True)
+plt.legend()
 plt.show()

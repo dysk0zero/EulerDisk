@@ -535,19 +535,10 @@ def extract_precession_ridge(
 def fit_precession_power_law(
     ridge_path: str,
     output_dir: str,
-    t0_min: float = 25.0,
-    t0_max: float = 27.0,
-    t0_step: float = 0.01,
+    t0_initial: float = 26.08,
 ) -> dict:
     """
-    Fit the dominant precession ridge to
-
-        f(t) = k * (1 / (t0 - t)) ** alpha
-
-    by scanning candidate values of t0 and selecting the one that minimizes
-    the least-squares error in log-log space.
-
-    This follows the final optimization stage of the MATLAB reference.
+    Initial power-law fit of the precession frequency.
     """
 
     data = np.load(ridge_path)
@@ -555,94 +546,50 @@ def fit_precession_power_law(
     time = data["time"]
     frequency = data["frequency"]
 
-    valid = frequency > 0
-    time = time[valid]
-    frequency = frequency[valid]
+    x = np.log10(t0_initial - time)
 
-    t0_values = np.arange(t0_min, t0_max + t0_step / 2, t0_step)
+    mask = (
+        (time < t0_initial)
+        & (x > -0.5)
+        & (x < 1.0)
+    )
 
-    errors = []
-    alphas = []
-    ks = []
+    time = time[mask]
+    frequency = frequency[mask]
+    x = x[mask]
+    y = np.log10(frequency)
 
-    best_error = np.inf
-    best_fit = {}
+    slope, intercept = np.polyfit(x, y, 1)
 
-    for t0 in t0_values:
+    alpha = -slope
+    k = 10**intercept
 
-        mask = time < t0
-
-        # Need enough samples to perform a regression
-        if np.count_nonzero(mask) < 5:
-            continue
-
-        x = np.log10(t0 - time[mask])
-        y = np.log10(frequency[mask])
-
-        slope, intercept = np.polyfit(x, y, deg=1)
-
-        alpha = -slope
-        k = 10.0 ** intercept
-
-        y_model = intercept + slope * x
-        error = np.sum((y - y_model) ** 2)
-
-        errors.append(error)
-        alphas.append(alpha)
-        ks.append(k)
-
-        if error < best_error:
-
-            best_error = error
-
-            frequency_fit = k * (1.0 / (t0 - time[mask])) ** alpha
-
-            ss_res = np.sum((y - y_model) ** 2)
-            ss_tot = np.sum((y - np.mean(y)) ** 2)
-
-            r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else np.nan
-            rmse = np.sqrt(np.mean((y - y_model) ** 2))
-
-            best_fit = {
-                "time": time[mask],
-                "frequency_fit": frequency_fit,
-                "t0": t0,
-                "alpha": alpha,
-                "k": k,
-                "rmse": rmse,
-                "r2": r2,
-            }
-
-    settings = {
-        "model": "f(t)=k*(1/(t0-t))**alpha",
-        "t0_min": t0_min,
-        "t0_max": t0_max,
-        "t0_step": t0_step,
-        "best_t0": best_fit["t0"],
-        "best_alpha": best_fit["alpha"],
-        "best_k": best_fit["k"],
-        "best_rmse": best_fit["rmse"],
-        "best_r2": best_fit["r2"],
-    }
-
-    with open(f"{output_dir}/settings_precession_fit.txt", "w") as f:
-        json.dump(settings, f, indent=4)
+    y_model = intercept + slope * x
+    frequency_model = k * (1.0 / (t0_initial - time)) ** alpha
 
     np.savez_compressed(
-        f"{output_dir}/precession_fit.npz",
-        **best_fit,
-        t0_scan=t0_values[: len(errors)],
-        error_scan=np.asarray(errors),
-        alpha_scan=np.asarray(alphas),
-        k_scan=np.asarray(ks),
+        f"{output_dir}/precession_powerlaw_fit.npz",
+        time=time,
+        frequency=frequency,
+        log_time=x,
+        log_frequency=y,
+        log_frequency_model=y_model,
+        frequency_model=frequency_model,
+        alpha=alpha,
+        k=k,
+        t0=t0_initial,
     )
 
     return {
-        **best_fit,
-        "t0_scan": t0_values[: len(errors)],
-        "error_scan": np.asarray(errors),
-        "alpha_scan": np.asarray(alphas),
-        "k_scan": np.asarray(ks),
+        "time": time,
+        "frequency": frequency,
+        "log_time": x,
+        "log_frequency": y,
+        "log_frequency_model": y_model,
+        "frequency_model": frequency_model,
+        "alpha": alpha,
+        "k": k,
+        "t0": t0_initial,
     }
 
 def peaks(
