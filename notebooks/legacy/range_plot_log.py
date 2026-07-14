@@ -72,7 +72,7 @@ for root, _, files in os.walk(base_dir):
                 label="Rolling Friction (n = 1/3)",
             )
             plt.plot(
-                log_delta_t, fit_bl, "g--", alpha=0.8, label="Boundary Layer (n = 2/9)"
+                log_delta_t, fit_bl, "g--", alpha=0.8, label="BL (n = 2/9)"
             )
             plt.plot(
                 log_delta_t,

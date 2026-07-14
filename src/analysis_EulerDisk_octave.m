@@ -105,12 +105,12 @@ PSD_A0=(abs(A0)).^2;
 fmax=f(idxm);
 fmax_smooth=fmax;
 Df=f(2)-f(1);    % spectral resolution
-for k=1:length(ts)
-    if idxm(k)>1
-        ya=PSD_A0(idxm(k)-1,k)-Pm(k);
-        yb=PSD_A0(idxm(k)+1,k)-Pm(k);
-        Dx=(ya-yb)/(ya+yb)*0.5;
-        fmax_smooth(k)=fmax(k)+Dx*Df;
+for k = 1:length(ts)
+    if idxm(k) > 1 && idxm(k) < length(f)
+        ya = PSD_A0(idxm(k)-1,k) - Pm(k);
+        yb = PSD_A0(idxm(k)+1,k) - Pm(k);
+        Dx = (ya-yb)/(ya+yb)*0.5;
+        fmax_smooth(k) = fmax(k) + Dx*Df;
     end
 end
 figure(8)
@@ -146,32 +146,49 @@ end
 
 %% ajuste parametrico de la frecuencia
 % fmax_smooth
-% f= k (1/(t-t0))^alpha
+% f = k (1/(t-t0))^alpha
 % alpha = 1/3
 
-lf=log10(fmax_smooth);
-t0=26.08;     % valor inicial de t0
-x=(log10(t0-ts))';
-cond=ts<t0;
-[ord,pend,r]=f_regresion(x(cond),lf(cond));
-lf_mod=ord+pend*x(cond);
+lf = log10(fmax_smooth(:));   % force column vector
+ts = ts(:);                   % force column vector
 
-alpha=-pend;
-k=10^(ord);
+t0 = 26.08;     % initial value of t0
+
+x = log10(t0 - ts);           % column vector
+
+cond = ts < t0;
+
+[ord,pend,r] = f_regresion(x(cond), lf(cond));
+lf_mod = ord + pend*x(cond);
+
+alpha = -pend;
+k = 10^ord;
+
 figure(9);
-plot(x(cond),lf(cond),'.',x(cond),lf_mod); xlabel('log10(t-t_0)'); ylabel('log10(fmax)'); grid on
-fprintf('Estimacin inicial:  alpha = %f    k = %f    t0 = %f    r=%f\n',alpha,k,t0,r)
+plot(x(cond), lf(cond), '.', x(cond), lf_mod);
+xlabel('log10(t-t_0)');
+ylabel('log10(fmax)');
+grid on
 
-% segundo analisis, limitando el rango de x
-cond=x>-0.5 & x<1 & ts'<t0;
-lf=lf(cond);
-x=x(cond);
-ts1=(ts(cond))';
-[ord,pend,r]=f_regresion(x,lf);
-lf_mod=ord+pend*x;
-alpha=-pend;
-k=10^(ord);
-f_mod=k.*(1./(t0-ts1)).^alpha;
+fprintf('Estimación inicial: alpha = %f    k = %f    t0 = %f    r = %f\n', ...
+        alpha, k, t0, r);
+
+%% Segundo análisis
+
+cond = (x > -0.5) & (x < 1) & (ts < t0);
+
+lf = lf(cond);
+x = x(cond);
+ts1 = ts(cond);
+
+[ord,pend,r] = f_regresion(x, lf);
+
+lf_mod = ord + pend*x;
+
+alpha = -pend;
+k = 10^ord;
+
+f_mod = k .* (1 ./ (t0 - ts1)).^alpha;
 
 figure(10);
 plot(x,lf,'.',x,lf_mod); xlabel('log10(t-t_0)'); ylabel('log10(fmax)'); grid on
@@ -181,36 +198,39 @@ figure(11);
 plot(ts1,f_mod,'.-')
 
 
-% buscamos el valor ptimo de t0
-t0_opt=-10000;
-Error_optimo=1e50;
-for t0_test=25:0.05:27
-    cond=ts1<t0_test;
-    x_test=(log10(t0_test-ts1(cond)));
-    lf_test=lf(cond);
-    [ord,pend,r]=f_regresion(x_test,lf_test);
-    lf_mod=ord+pend*x_test;
-    Error=sum((lf_mod-lf_test).^2); 
-    if Error<Error_optimo
-        Error_optimo=Error;
-        t0_opt=t0_test;
-        k_opt=10^ord;
-        alpha_opt=-pend;
-        fprintf('Hemos mejorado!!!\n')
-        figure(12);
-        plot(x_test,lf_test,'.',x_test,lf_mod); xlabel('log10(t-t_0)'); ylabel('log10(fmax)'); grid on
-    end
-    fprintf('t0=%f    alpha=%f   Error=%f   r=%f\n',t0_test,-pend,Error,r)  
+%% Use a fixed collapse time instead of searching for it
+
+t0_opt = 26.06;
+
+cond = ts < t0_opt;
+ts_mod = ts(cond);
+
+% Refit alpha and k using the fixed t0
+x_fit = log10(t0_opt - ts_mod);
+lf_fit = log10(fmax_smooth(cond));
+
+[ord, pend, r] = f_regresion(x_fit, lf_fit);
+
+alpha_opt = -pend;
+k_opt = 10^ord;
+
+fprintf('Using fixed t0 = %.3f s\n', t0_opt);
+fprintf('Estimated alpha = %.4f\n', alpha_opt);
+fprintf('Estimated k = %.4f\n', k_opt);
+
+% Generate model over the whole time axis
+f_mod = zeros(size(ts));
+f_mod(cond) = k_opt .* (1 ./ (t0_opt - ts_mod)).^alpha_opt;
+
+% Hold the last value constant after t0
+if any(~cond)
+    f_mod(~cond) = f_mod(find(cond,1,'last'));
 end
 
-cond=ts<t0_opt;
-ts_mod=ts(cond)';
-f_mod=k_opt.*(1./(t0_opt-ts_mod)).^alpha_opt;
-N=length(ts)-length(ts_mod);
-f_mod=[f_mod; ones(N,1)*f_mod(end)];
-
 figure(11)
-plot(ts,fmax_smooth,ts,f_mod)
+plot(ts, fmax_smooth, 'b', ts, f_mod, 'r', 'LineWidth', 1.5)
+legend('Measured','Model')
+grid on
 
 %% demodulacion de fase alrededor de la frecuencia instantanea
 f0_mod=interp1(ts,f_mod,t2,'linear','extrap');

@@ -12,8 +12,8 @@ import matplotlib.pyplot as plt
 # Under this folder are all the wav files.
 
 
-input_dir = "../data/wav/recording_04.wav"
-output_dir = "../data/output/recording_04/"
+input_dir = "../../data/wav/recording_04.wav"
+output_dir = "../../data/output/recording_04/"
 os.makedirs(output_dir, exist_ok=True)
 
 # ## Step 1: Welch's Method

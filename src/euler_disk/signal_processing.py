@@ -64,19 +64,6 @@ def welch(
     frequency = frequency[band]
     power = power[band]
 
-    settings = {
-        "data_rate_hz": rate,
-        "window_length": window_size,
-        "hop_size": hop_size,
-        "overlap": noverlap,
-        "window_type": "Hann",
-        "freq_bins": len(frequency),
-        "scaling": "density",  # or 'spectrum'
-    }
-
-    with open(f"{output_dir}/settings_welch.txt", "w") as f:
-        json.dump(settings, f, indent=4)
-
     np.savez_compressed(
         f"{output_dir}/data_welch.npz", frequencies=frequency, power=power
     )
