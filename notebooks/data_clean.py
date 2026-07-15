@@ -10,7 +10,7 @@ from scipy.ndimage import uniform_filter1d
 # Parameters
 # -------------------------------------------------------
 
-input_file = "../data/raw/huge_enourmous_disc_dingly_dongus_recording_five_times.wav"
+input_file = "../data/raw/plastic.wav"
 output_dir = "../data/split"
 
 os.makedirs(output_dir, exist_ok=True)
@@ -47,7 +47,7 @@ window = int(fs * smooth_ms / 1000)
 
 env = uniform_filter1d(env, size=window)
 
-threshold = threshold_ratio * env.max()/2
+threshold = threshold_ratio * env.max()/3
 
 active = env > threshold
 
@@ -120,7 +120,7 @@ for i, (start, stop) in enumerate(regions, start=1):
     b = min(len(x), stop + pad)
 
     wavfile.write(
-        os.path.join(output_dir, f"big_{i:02d}.wav"),
+        os.path.join(output_dir, f"plastic_{i:02d}.wav"),
         fs,
         x_out[a:b],
     )
